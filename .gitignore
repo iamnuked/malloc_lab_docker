@@ -1,2 +1,27 @@
-*.o
 mdriver
+
+# OS metadata
+.DS_Store
+.DS_store
+**/.DS_Store
+**/.DS_store
+
+# Editor settings
+.vscode/
+**/.vscode/
+
+# C build artifacts
+*.o
+*.obj
+*.out
+*.exe
+*.app
+*.dSYM/
+*.so
+*.a
+*.dll
+*.dylib
+a.out
+
+#
+malloc-lab/playground.c
