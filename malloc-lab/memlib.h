@@ -9,3 +9,7 @@ void *mem_heap_hi(void);
 size_t mem_heapsize(void);
 size_t mem_pagesize(void);
 
+
+static char *mem_start_brk;  /* points to first byte of heap */
+static char *mem_brk;        /* points to last byte of heap */
+static char *mem_max_addr;   /* largest legal heap address */ 
