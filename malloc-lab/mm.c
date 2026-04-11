@@ -45,6 +45,8 @@ team_t team = {
 
 /* 매크로 함수, 상수 */
 
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+
 #define W_SIZE 4 // 워드 사이즈
 #define DW_SIZE 8 // 더블워드 사이즈
 #define CHUNK_SIZE (1<<12) // 4KB
@@ -73,6 +75,11 @@ team_t team = {
 
 /* 매크로 함수, 상수 */
 
+static void* extend_heap(size_t words);
+static void* coalesce(void *bp);
+static void* find_fit(size_t a_size);
+static void place(void *bp, size_t a_size);
+
 
 /*
  * mm_init - initialize the malloc package.
@@ -96,6 +103,7 @@ int mm_init(void) {
     // prologue block pointer로 위치시키기
     mem_start_brk += (2*W_SIZE);
 
+    
     if(extend_heap(CHUNK_SIZE/W_SIZE) == NULL) return -1;
 
     return 0;
@@ -103,7 +111,7 @@ int mm_init(void) {
 
 
 // 힙 공간 늘리기 -> 새로 가용 블록 생성 후 이전 블록과 병합할 수 있으면 병합
-void* extend_heap(size_t words) {
+static void* extend_heap(size_t words) {
     char* bp;
     size_t size;
 
@@ -129,22 +137,35 @@ void* extend_heap(size_t words) {
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size) {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-        return NULL;
-    else
-    {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+    size_t a_size;
+    size_t extendsize;
+    char *bp;
+
+    if(size == 0) return NULL;
+
+    if(size <= DW_SIZE) {
+        a_size = 2*DW_SIZE;   
+    } 
+    else {
+        a_size = DW_SIZE * ((size + (DW_SIZE) + (DW_SIZE-1)) / DW_SIZE);
     }
+
+    if((bp = find_fit(a_size)) != NULL) {
+        place(bp, a_size);
+        return bp;
+    }
+
+    extendsize = MAX(a_size, CHUNK_SIZE);
+    if((bp = extend_heap(extendsize/W_SIZE)) == NULL) return NULL;
+    place(bp, a_size);
+    return bp;
 }
 
 /*
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr) {
-    size_t size = GET_BLOCK_SIZE(HDRP(ptr));
+    size_t size = GET_BLOCK_SIZE(HDR_P(ptr));
 
     PUT(HDR_P(ptr), MAKE_H_F(size, 0));
     PUT(FTR_P(ptr), MAKE_H_F(size, 0));
@@ -176,7 +197,7 @@ void *mm_realloc(void *ptr, size_t size)
 
 static void *coalesce(void *bp) {
     size_t prev_alloc = GET_IS_ALLOC(FTR_P(PREV_BLOCK_P(bp)));
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLOCK_P(bp)));
+    size_t next_alloc = GET_IS_ALLOC(HDR_P(NEXT_BLOCK_P(bp)));
     size_t size = GET_BLOCK_SIZE(HDR_P(bp));
 
     // 앞 뒤 다 사용중일 경우
@@ -202,5 +223,32 @@ static void *coalesce(void *bp) {
         PUT(FTR_P(NEXT_BLOCK_P(bp)), MAKE_H_F(size, 0));
         bp = PREV_BLOCK_P(bp);
     }
+    return bp;
+}
 
+static void* find_fit(size_t a_size) {
+    void *bp;
+
+    for(bp = mem_start_brk; GET_BLOCK_SIZE(HDR_P(bp)) > 0; bp = NEXT_BLOCK_P(bp)) {
+        if(!GET_IS_ALLOC(HDR_P(bp)) && (a_size <= GET_BLOCK_SIZE(HDR_P(bp)))) {
+            return bp;
+        }
+    }
+    return NULL;
+}
+
+static void place(void *bp, size_t a_size) {
+    size_t c_size = GET_BLOCK_SIZE(HDR_P(bp));
+
+    if((c_size - a_size) >= (2*DW_SIZE)) {
+        PUT(HDR_P(bp), MAKE_H_F(a_size, 1));
+        PUT(FTR_P(bp), MAKE_H_F(a_size, 1));
+        bp = NEXT_BLOCK_P(bp);
+        PUT(HDR_P(bp), MAKE_H_F(c_size - a_size, 1));
+        PUT(FTR_P(bp), MAKE_H_F(a_size - a_size, 1));
+    }
+    else {
+        PUT(HDR_P(bp), MAKE_H_F(c_size, 1));
+        PUT(FTR_P(bp), MAKE_H_F(c_size, 1));
+    }
 }

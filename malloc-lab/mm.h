@@ -5,9 +5,10 @@ extern void *mm_malloc (size_t size);
 extern void mm_free (void *ptr);
 extern void *mm_realloc(void *ptr, size_t size);
 
-static void* extend_heap(size_t words);
-static void* coalesce(void *bp);
-
+// static void* extend_heap(size_t words);
+// static void* coalesce(void *bp);
+// static void* find_fit(size_t a_size);
+// static void place(void *bp, size_t a_size);
 
 /* 
  * Students work in teams of one or two.  Teams enter their team name, 
