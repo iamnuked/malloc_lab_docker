@@ -144,7 +144,11 @@ void *mm_malloc(size_t size) {
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr) {
+    size_t size = GET_BLOCK_SIZE(HDRP(ptr));
 
+    PUT(HDR_P(ptr), MAKE_H_F(size, 0));
+    PUT(FTR_P(ptr), MAKE_H_F(size, 0));
+    coalesce(ptr);
 }
 
 /*
@@ -170,3 +174,33 @@ void *mm_realloc(void *ptr, size_t size)
 
 
 
+static void *coalesce(void *bp) {
+    size_t prev_alloc = GET_IS_ALLOC(FTR_P(PREV_BLOCK_P(bp)));
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLOCK_P(bp)));
+    size_t size = GET_BLOCK_SIZE(HDR_P(bp));
+
+    // 앞 뒤 다 사용중일 경우
+    if(prev_alloc && next_alloc) return bp;
+    // 뒤랑 병합
+    else if(prev_alloc && !next_alloc) {
+        size += GET_BLOCK_SIZE(HDR_P(NEXT_BLOCK_P(bp)));
+        PUT(HDR_P(bp), MAKE_H_F(size, 0));
+        PUT(FTR_P(bp), MAKE_H_F(size, 0));
+    }
+    // 앞이랑 병합
+    else if(!prev_alloc && next_alloc) {
+        size += GET_BLOCK_SIZE(HDR_P(PREV_BLOCK_P(bp)));
+        PUT(HDR_P(PREV_BLOCK_P(bp)), MAKE_H_F(size, 0));
+        PUT(FTR_P(bp), MAKE_H_F(size, 0));
+        bp = PREV_BLOCK_P(bp);
+    }
+    // 둘 다 병합
+    else {
+        size += GET_BLOCK_SIZE(HDR_P(PREV_BLOCK_P(bp))) + GET_BLOCK_SIZE(HDR_P(NEXT_BLOCK_P(bp)));
+
+        PUT(HDR_P(PREV_BLOCK_P(bp)), MAKE_H_F(size, 0));
+        PUT(FTR_P(NEXT_BLOCK_P(bp)), MAKE_H_F(size, 0));
+        bp = PREV_BLOCK_P(bp);
+    }
+
+}
