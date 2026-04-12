@@ -73,6 +73,22 @@ team_t team = {
 #define PREV_BLOCK_P(bp) ( (char *)(bp) - GET_BLOCK_SIZE(( (char *)(bp) - DW_SIZE)) )
 
 
+// 가용 리스트 포인터 
+#define MAKE_PS_P(bp)
+#define PRED_P(bp) ((char *)(bp))
+#define SUCC_P(bp) ((char*)(bp) + W_SIZE)
+
+
+// 분리 가용 리스트 배열 -> 헤드가 들어가있음
+typedef struct _seg_free_list {
+    size_t min_size;
+    size_t max_size;
+    void* head;
+} seg_free_list;
+
+#define LIST_LIMIT 10
+static seg_free_list free_list_head[LIST_LIMIT];
+
 /* 매크로 함수, 상수 */
 
 static void* extend_heap(size_t words);
@@ -85,6 +101,13 @@ static void place(void *bp, size_t a_size);
  * mm_init - initialize the malloc package.
  */
 int mm_init(void) {
+
+    // 분리 가용 리스트 테이블 만들기
+    for(int i = 1; i <= 10; i++) {
+        free_list_head[i-1].min_size = 1 << i;
+        free_list_head[i-1].max_size = 2 << (i + 1);
+    }
+
     
     // 16만큼 할당, mem_sbrk는 이전 포인터 반환해줌
     if( (mem_start_brk = mem_sbrk(4 * W_SIZE)) == (void *)-1 ) return -1;
@@ -128,8 +151,39 @@ static void* extend_heap(size_t words) {
     PUT(HDR_P(NEXT_BLOCK_P(bp)), MAKE_H_F(0, 1));
 
 
-    return coalesce(bp);
+    // 분리 가용 리스트에 저장
+    return insert_free_list(coalesce(bp));;
 }
+
+
+// free_list 인덱스 구하기
+static int get_list_index(size_t size) {
+    int idx = 0;
+
+    while (idx < LIST_LIMIT - 1 && size > 1) {
+        size >>= 1;
+        idx++;
+    }
+
+    return idx;
+}
+
+// free_list 추가
+static void* insert_free_list(void* ptr) {
+    int idx = get_list_index(GET_BLOCK_SIZE(ptr));
+    PUT(free_list_head[idx].head + W_SIZE, ptr);// 1번 head + 4 위치 값을 ptr 주소로 저장
+    ptr = free_list_head[idx].head;             // 2번 head 주소 ptr에 저장
+    free_list_head[idx].head = ptr;             // 3번 head 값을 ptr로 저장
+
+    return ptr;
+}
+
+// 할당 시 free list에서 삭제
+static void* remove_free_list(void* ptr) {
+    int idx = get_list_index(GET_BLOCK_SIZE(ptr));
+
+}
+
 
 
 /*
@@ -169,7 +223,7 @@ void mm_free(void *ptr) {
 
     PUT(HDR_P(ptr), MAKE_H_F(size, 0));
     PUT(FTR_P(ptr), MAKE_H_F(size, 0));
-    coalesce(ptr);
+    insert_free_list(coalesce(ptr)); // 병합 후 가용 리스트 추가
 }
 
 /*
