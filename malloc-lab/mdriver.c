@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <float.h>
 #include <time.h>
+#include <stdint.h>
 
 extern char *optarg; // Added declaration for optarg
 
@@ -33,7 +34,7 @@ extern char *optarg; // Added declaration for optarg
 #define LINENUM(i) (i + 5) /* cnvt trace request nums to linenums (origin 1) */
 
 /* Returns true if p is ALIGNMENT-byte aligned */
-#define IS_ALIGNED(p) ((((unsigned int)(p)) % ALIGNMENT) == 0)
+#define IS_ALIGNED(p) ((((uintptr_t)(p)) % ALIGNMENT) == 0)
 
 /******************************
  * The key compound data types

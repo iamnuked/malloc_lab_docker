@@ -24,43 +24,39 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "ateam",
+    "ROOM303-TEAM4",
     /* First member's full name */
-    "Harry Bovik",
+    "BEOM JIN JEONG",
     /* First member's email address */
-    "bovik@cs.cmu.edu",
+    "qjawls6262@gmail.com",
     /* Second member's full name (leave blank if none) */
     "",
     /* Second member's email address (leave blank if none) */
-    ""};
+    ""
+};
 
-/* single word (4) or double word (8) alignment */
-#define ALIGNMENT 8
+/* 64비트 기준으로 정렬 16으로 변경 */
+#define ALIGNMENT 16
 
-/* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
+/* 요청 크기 16배수로 맞춰주기 */
+#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0xf)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-
-/* 매크로 함수, 상수 */
-
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-#define W_SIZE 4 // 워드 사이즈
-#define DW_SIZE 8 // 더블워드 사이즈
+#define W_SIZE 8 // 워드 사이즈
+#define DW_SIZE 16 // 더블워드 사이즈
 #define CHUNK_SIZE (1<<12) // 4KB
 
-// 헤더 or 풋터 만들기
-#define MAKE_H_F(b_size, isAllocated) ((b_size) | (isAllocated))
 
 // 해당 위치 value 가져오기
-#define GET(p) (*(unsigned int*)(p))
+#define GET(p) (*(size_t *)(p))
 // 해당 위치에 value 저장하기
-#define PUT(p, val) ( (*(unsigned int*)(p)) = (val) )
+#define PUT(p, val) ( (*(size_t *)(p)) = (size_t)(val) )
 
 // 헤더 or 풋터에서 블럭 사이즈 가져오기
-#define GET_BLOCK_SIZE(p) (GET(p) & ~0x7)
+#define GET_BLOCK_SIZE(p) (GET(p) & ~0xf)
 // 헤더 or 풋터에서 할당 여부 플래그값 가져오기
 #define GET_IS_ALLOC(p) (GET(p) & 0x1)
 
@@ -73,10 +69,18 @@ team_t team = {
 #define PREV_BLOCK_P(bp) ( (char *)(bp) - GET_BLOCK_SIZE(( (char *)(bp) - DW_SIZE)) )
 
 
+// 헤더 or 풋터 내용 채워넣기
+#define MAKE_H_F(b_size, isAllocated) ((b_size) | (isAllocated))
+
+// 헤더와 풋터 넣기
+#define INSERT_H(p, b_size, isAllocated) (PUT((HDR_P(p)), MAKE_H_F((b_size), (isAllocated))))
+#define INSERT_F(p, b_size, isAllocated) (PUT((FTR_P(p)), MAKE_H_F((b_size), (isAllocated))))
+
+
 // 가용 리스트 포인터 
-#define MAKE_PS_P(bp)
 #define PRED_P(bp) ((char *)(bp))
 #define SUCC_P(bp) ((char*)(bp) + W_SIZE)
+
 
 
 // 분리 가용 리스트 배열 -> 헤드가 들어가있음
@@ -86,29 +90,26 @@ typedef struct _seg_free_list {
     void* head;
 } seg_free_list;
 
-#define LIST_LIMIT 10
+#define LIST_LIMIT 20
 static seg_free_list free_list_head[LIST_LIMIT];
+
+
 
 /* 매크로 함수, 상수 */
 
 static void* extend_heap(size_t words);
-static void* coalesce(void *bp);
-static void* find_fit(size_t a_size);
-static void place(void *bp, size_t a_size);
-
+static void* coalesce(void* bp);
+static void* first_fit(size_t a_size);
+static void place(void* bp, size_t a_size);
+static void* split(void* bp, size_t a_size, size_t c_size);
+static void* insert_free_list(void* bp);
 
 /*
  * mm_init - initialize the malloc package.
  */
+// 완성
 int mm_init(void) {
 
-    // 분리 가용 리스트 테이블 만들기
-    for(int i = 1; i <= 10; i++) {
-        free_list_head[i-1].min_size = 1 << i;
-        free_list_head[i-1].max_size = 2 << (i + 1);
-    }
-
-    
     // 16만큼 할당, mem_sbrk는 이전 포인터 반환해줌
     if( (mem_start_brk = mem_sbrk(4 * W_SIZE)) == (void *)-1 ) return -1;
     // unused padding 추가 작업
@@ -126,7 +127,13 @@ int mm_init(void) {
     // prologue block pointer로 위치시키기
     mem_start_brk += (2*W_SIZE);
 
-    
+    // 분리 가용 리스트 테이블 만들기
+    for(int i = 1; i <= LIST_LIMIT; i++) {
+        free_list_head[i-1].min_size = 1 << i;
+        free_list_head[i-1].max_size = 2 << (i + 1);
+        free_list_head[i-1].head = NULL;
+    }
+
     if(extend_heap(CHUNK_SIZE/W_SIZE) == NULL) return -1;
 
     return 0;
@@ -138,7 +145,7 @@ static void* extend_heap(size_t words) {
     char* bp;
     size_t size;
 
-    // words를 짝수로 맞추면 size는 8의 배수로 됨 -> W_SIZE가 4이기 때문
+    // words를 짝수로 맞추면 size는 16의 배수로 됨 -> W_SIZE가 8이기 때문
     size = (words % 2) ? (words+1) * W_SIZE : words * W_SIZE;
     if((long)(bp = mem_sbrk(size)) == -1) return NULL;
 
@@ -168,20 +175,24 @@ static int get_list_index(size_t size) {
     return idx;
 }
 
-// free_list 추가
-static void* insert_free_list(void* ptr) {
-    int idx = get_list_index(GET_BLOCK_SIZE(ptr));
-    PUT(free_list_head[idx].head + W_SIZE, ptr);// 1번 head + 4 위치 값을 ptr 주소로 저장
-    ptr = free_list_head[idx].head;             // 2번 head 주소 ptr에 저장
-    free_list_head[idx].head = ptr;             // 3번 head 값을 ptr로 저장
-
-    return ptr;
-}
 
 // 할당 시 free list에서 삭제
-static void* remove_free_list(void* ptr) {
-    int idx = get_list_index(GET_BLOCK_SIZE(ptr));
+static void* remove_free_list(void* bp) {
+    int idx = get_list_index(GET_BLOCK_SIZE(HDR_P(bp)));
+    void *prev = (void*)GET(PRED_P(bp));
+    void *next = (void*)GET(SUCC_P(bp));
 
+    if(prev != NULL) {
+        PUT(SUCC_P(prev), next);
+    }
+    else {
+        free_list_head[idx].head = next;
+    }
+
+    if(next != NULL) {
+        PUT(PRED_P(next), prev);
+    }
+    return bp;
 }
 
 
@@ -204,7 +215,7 @@ void *mm_malloc(size_t size) {
         a_size = DW_SIZE * ((size + (DW_SIZE) + (DW_SIZE-1)) / DW_SIZE);
     }
 
-    if((bp = find_fit(a_size)) != NULL) {
+    if((bp = first_fit(a_size)) != NULL) {
         place(bp, a_size);
         return bp;
     }
@@ -231,24 +242,132 @@ void mm_free(void *ptr) {
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
     void *newptr;
+    void *next_bp;
+    size_t old_size;
+    size_t a_size;
     size_t copySize;
 
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
+    if (ptr == NULL) {
+        return mm_malloc(size);
+    }
+
+    if (size == 0) {
+        mm_free(ptr);
         return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
+    }
+
+    if (size <= DW_SIZE) {
+        a_size = 2 * DW_SIZE;
+    }
+    else {
+        a_size = DW_SIZE * ((size + DW_SIZE + (DW_SIZE - 1)) / DW_SIZE);
+    }
+
+    old_size = GET_BLOCK_SIZE(HDR_P(ptr));
+    copySize = old_size - DW_SIZE;
+    if (size < copySize) {
         copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
+    }
+
+    if (a_size <= old_size) {
+        if ((old_size - a_size) >= (4 * W_SIZE)) {
+            void *free_bp;
+            size_t free_size = old_size - a_size;
+
+            INSERT_H(ptr, a_size, 1);
+            INSERT_F(ptr, a_size, 1);
+
+            free_bp = NEXT_BLOCK_P(ptr);
+            INSERT_H(free_bp, free_size, 0);
+            INSERT_F(free_bp, free_size, 0);
+            insert_free_list(coalesce(free_bp));
+        }
+        return ptr;
+    }
+
+    next_bp = NEXT_BLOCK_P(ptr);
+
+    if (!GET_IS_ALLOC(HDR_P(next_bp))) {
+        size_t combined_size = old_size + GET_BLOCK_SIZE(HDR_P(next_bp));
+
+        if (combined_size >= a_size) {
+            remove_free_list(next_bp);
+
+            if ((combined_size - a_size) >= (4 * W_SIZE)) {
+                void *free_bp;
+                size_t free_size = combined_size - a_size;
+
+                INSERT_H(ptr, a_size, 1);
+                INSERT_F(ptr, a_size, 1);
+
+                free_bp = NEXT_BLOCK_P(ptr);
+                INSERT_H(free_bp, free_size, 0);
+                INSERT_F(free_bp, free_size, 0);
+                insert_free_list(free_bp);
+            }
+            else {
+                INSERT_H(ptr, combined_size, 1);
+                INSERT_F(ptr, combined_size, 1);
+            }
+            return ptr;
+        }
+    }
+
+    if (GET_BLOCK_SIZE(HDR_P(next_bp)) == 0) {
+        size_t extend_size = a_size - old_size;
+
+        if (mem_sbrk(extend_size) == (void *)-1) {
+            return NULL;
+        }
+
+        INSERT_H(ptr, a_size, 1);
+        INSERT_F(ptr, a_size, 1);
+        PUT(HDR_P(NEXT_BLOCK_P(ptr)), MAKE_H_F(0, 1));
+        return ptr;
+    }
+
+    if (!GET_IS_ALLOC(FTR_P(PREV_BLOCK_P(ptr)))) {
+        void *prev_bp = PREV_BLOCK_P(ptr);
+        size_t combined_size = GET_BLOCK_SIZE(HDR_P(prev_bp)) + old_size;
+
+        if (combined_size >= a_size) {
+            remove_free_list(prev_bp);
+            memmove(prev_bp, ptr, copySize);
+
+            if ((combined_size - a_size) >= (4 * W_SIZE)) {
+                void *free_bp;
+                size_t free_size = combined_size - a_size;
+
+                INSERT_H(prev_bp, a_size, 1);
+                INSERT_F(prev_bp, a_size, 1);
+
+                free_bp = NEXT_BLOCK_P(prev_bp);
+                INSERT_H(free_bp, free_size, 0);
+                INSERT_F(free_bp, free_size, 0);
+                insert_free_list(free_bp);
+            }
+            else {
+                INSERT_H(prev_bp, combined_size, 1);
+                INSERT_F(prev_bp, combined_size, 1);
+            }
+            return prev_bp;
+        }
+    }
+
+    newptr = mm_malloc(size);
+    if (newptr == NULL) {
+        return NULL;
+    }
+
+    memcpy(newptr, ptr, copySize);
+    mm_free(ptr);
     return newptr;
 }
 
 
 
-
+// 병합
 static void *coalesce(void *bp) {
     size_t prev_alloc = GET_IS_ALLOC(FTR_P(PREV_BLOCK_P(bp)));
     size_t next_alloc = GET_IS_ALLOC(HDR_P(NEXT_BLOCK_P(bp)));
@@ -258,51 +377,108 @@ static void *coalesce(void *bp) {
     if(prev_alloc && next_alloc) return bp;
     // 뒤랑 병합
     else if(prev_alloc && !next_alloc) {
+        void* next_bp = NEXT_BLOCK_P(bp);
+        remove_free_list(next_bp);
+
         size += GET_BLOCK_SIZE(HDR_P(NEXT_BLOCK_P(bp)));
         PUT(HDR_P(bp), MAKE_H_F(size, 0));
         PUT(FTR_P(bp), MAKE_H_F(size, 0));
     }
     // 앞이랑 병합
     else if(!prev_alloc && next_alloc) {
+        void* prev_bp = PREV_BLOCK_P(bp);
+        remove_free_list(prev_bp);
+
         size += GET_BLOCK_SIZE(HDR_P(PREV_BLOCK_P(bp)));
         PUT(HDR_P(PREV_BLOCK_P(bp)), MAKE_H_F(size, 0));
         PUT(FTR_P(bp), MAKE_H_F(size, 0));
-        bp = PREV_BLOCK_P(bp);
+        bp = prev_bp;
     }
     // 둘 다 병합
     else {
+        void* next_bp = NEXT_BLOCK_P(bp);
+        void* prev_bp = PREV_BLOCK_P(bp);
+        remove_free_list(next_bp);
+        remove_free_list(prev_bp);
+        
         size += GET_BLOCK_SIZE(HDR_P(PREV_BLOCK_P(bp))) + GET_BLOCK_SIZE(HDR_P(NEXT_BLOCK_P(bp)));
 
         PUT(HDR_P(PREV_BLOCK_P(bp)), MAKE_H_F(size, 0));
         PUT(FTR_P(NEXT_BLOCK_P(bp)), MAKE_H_F(size, 0));
-        bp = PREV_BLOCK_P(bp);
+        bp = prev_bp;
     }
     return bp;
 }
 
-static void* find_fit(size_t a_size) {
-    void *bp;
 
-    for(bp = mem_start_brk; GET_BLOCK_SIZE(HDR_P(bp)) > 0; bp = NEXT_BLOCK_P(bp)) {
-        if(!GET_IS_ALLOC(HDR_P(bp)) && (a_size <= GET_BLOCK_SIZE(HDR_P(bp)))) {
-            return bp;
+
+// 가용 블럭 찾는 코드 -> 완
+static void* first_fit(size_t size) {
+    int idx = get_list_index(size);
+
+    while(idx < LIST_LIMIT) {
+        void* bp = free_list_head[idx].head;
+
+        while(bp != NULL) {
+            if(size <= GET_BLOCK_SIZE(HDR_P(bp))) {
+                return bp;
+            }
+            bp = (void*)GET(SUCC_P(bp));
         }
+        idx++;
     }
     return NULL;
 }
 
+
+// 구현중
 static void place(void *bp, size_t a_size) {
     size_t c_size = GET_BLOCK_SIZE(HDR_P(bp));
 
-    if((c_size - a_size) >= (2*DW_SIZE)) {
-        PUT(HDR_P(bp), MAKE_H_F(a_size, 1));
-        PUT(FTR_P(bp), MAKE_H_F(a_size, 1));
+    // split하면 자동으로 할당 블럭 만들어줌 나중에 매크로 함수로 바꾸면 성능 향상될 거 같음
+    remove_free_list(bp);
+    split(bp, a_size, c_size);
+}
+
+
+// a_size 할당 받을 블럭 크기, c_size 블럭 전체 크기, c_size - a_size 남은 블럭 크기
+// split 가능하면 하고 가능하지 않으면 그대로 할당
+static void* split(void* bp, size_t a_size, size_t c_size) {
+    
+    // 남은 크기가 32보다 클 경우 (최소 블럭 크기 = 8+8+8+8) 헤더, 포인터2개, 풋터 
+    if((c_size - a_size) >= (4*W_SIZE)) {
+        INSERT_H(bp, a_size, 1);
+        INSERT_F(bp, a_size, 1);
+
+        // 분리된 공간 가용 영역으로 만들기
         bp = NEXT_BLOCK_P(bp);
-        PUT(HDR_P(bp), MAKE_H_F(c_size - a_size, 1));
-        PUT(FTR_P(bp), MAKE_H_F(a_size - a_size, 1));
+        INSERT_H(bp, c_size - a_size, 0);
+        INSERT_F(bp, c_size - a_size, 0);
+        insert_free_list(bp);
     }
     else {
-        PUT(HDR_P(bp), MAKE_H_F(c_size, 1));
-        PUT(FTR_P(bp), MAKE_H_F(c_size, 1));
+        INSERT_H(bp, c_size, 1);
+        INSERT_F(bp, c_size, 1);
     }
+    return bp;
 }
+
+// 경우의 수 2가지
+// 1. head가 존재하지 않을 경우
+// 2. head가 존재할 경우
+static void* insert_free_list(void* bp) {
+    size_t size = GET_BLOCK_SIZE(HDR_P(bp));
+    int idx = get_list_index(size);
+    void* head = free_list_head[idx].head;
+
+    PUT(PRED_P(bp), NULL);
+    PUT(SUCC_P(bp), head);
+
+    if(head != NULL) {
+        PUT(PRED_P(head), bp);
+    }
+    free_list_head[idx].head = bp;
+    return bp;
+}
+
+
