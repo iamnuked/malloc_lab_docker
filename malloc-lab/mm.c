@@ -101,7 +101,6 @@ static void* extend_heap(size_t words);
 static void* coalesce(void* bp);
 static void* first_fit(size_t a_size);
 static void place(void* bp, size_t a_size);
-static void* split(void* bp, size_t a_size, size_t c_size);
 static void* insert_free_list(void* bp);
 
 /*
@@ -240,8 +239,7 @@ void mm_free(void *ptr) {
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
-void *mm_realloc(void *ptr, size_t size)
-{
+void *mm_realloc(void *ptr, size_t size) {
     void *newptr;
     void *next_bp;
     size_t old_size;
@@ -380,7 +378,7 @@ static void *coalesce(void *bp) {
         void* next_bp = NEXT_BLOCK_P(bp);
         remove_free_list(next_bp);
 
-        size += GET_BLOCK_SIZE(HDR_P(NEXT_BLOCK_P(bp)));
+        size += GET_BLOCK_SIZE(HDR_P(next_bp));
         PUT(HDR_P(bp), MAKE_H_F(size, 0));
         PUT(FTR_P(bp), MAKE_H_F(size, 0));
     }
@@ -389,8 +387,8 @@ static void *coalesce(void *bp) {
         void* prev_bp = PREV_BLOCK_P(bp);
         remove_free_list(prev_bp);
 
-        size += GET_BLOCK_SIZE(HDR_P(PREV_BLOCK_P(bp)));
-        PUT(HDR_P(PREV_BLOCK_P(bp)), MAKE_H_F(size, 0));
+        size += GET_BLOCK_SIZE(HDR_P(prev_bp));
+        PUT(HDR_P(prev_bp), MAKE_H_F(size, 0));
         PUT(FTR_P(bp), MAKE_H_F(size, 0));
         bp = prev_bp;
     }
@@ -401,10 +399,10 @@ static void *coalesce(void *bp) {
         remove_free_list(next_bp);
         remove_free_list(prev_bp);
         
-        size += GET_BLOCK_SIZE(HDR_P(PREV_BLOCK_P(bp))) + GET_BLOCK_SIZE(HDR_P(NEXT_BLOCK_P(bp)));
+        size += GET_BLOCK_SIZE(HDR_P(prev_bp)) + GET_BLOCK_SIZE(HDR_P(next_bp));
 
-        PUT(HDR_P(PREV_BLOCK_P(bp)), MAKE_H_F(size, 0));
-        PUT(FTR_P(NEXT_BLOCK_P(bp)), MAKE_H_F(size, 0));
+        PUT(HDR_P(prev_bp), MAKE_H_F(size, 0));
+        PUT(FTR_P(next_bp), MAKE_H_F(size, 0));
         bp = prev_bp;
     }
     return bp;
@@ -431,20 +429,16 @@ static void* first_fit(size_t size) {
 }
 
 
-// 구현중
+
 static void place(void *bp, size_t a_size) {
     size_t c_size = GET_BLOCK_SIZE(HDR_P(bp));
 
     // split하면 자동으로 할당 블럭 만들어줌 나중에 매크로 함수로 바꾸면 성능 향상될 거 같음
     remove_free_list(bp);
-    split(bp, a_size, c_size);
-}
 
 
-// a_size 할당 받을 블럭 크기, c_size 블럭 전체 크기, c_size - a_size 남은 블럭 크기
-// split 가능하면 하고 가능하지 않으면 그대로 할당
-static void* split(void* bp, size_t a_size, size_t c_size) {
-    
+    // a_size 할당 받을 블럭 크기, c_size 블럭 전체 크기, c_size - a_size 남은 블럭 크기
+    // split 가능하면 하고 가능하지 않으면 그대로 할당
     // 남은 크기가 32보다 클 경우 (최소 블럭 크기 = 8+8+8+8) 헤더, 포인터2개, 풋터 
     if((c_size - a_size) >= (4*W_SIZE)) {
         INSERT_H(bp, a_size, 1);
@@ -460,8 +454,9 @@ static void* split(void* bp, size_t a_size, size_t c_size) {
         INSERT_H(bp, c_size, 1);
         INSERT_F(bp, c_size, 1);
     }
-    return bp;
 }
+
+
 
 // 경우의 수 2가지
 // 1. head가 존재하지 않을 경우
