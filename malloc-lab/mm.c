@@ -48,7 +48,7 @@ team_t team = {
 
 #define W_SIZE 8 // 워드 사이즈
 #define DW_SIZE 16 // 더블워드 사이즈
-#define CHUNK_SIZE (1<<5) // 4KB
+#define CHUNK_SIZE (1<<5) // 4KB -> 16B로 수정 2점 향상
 
 
 // 해당 위치 value 가져오기
