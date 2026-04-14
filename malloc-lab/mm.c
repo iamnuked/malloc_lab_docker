@@ -44,10 +44,11 @@ team_t team = {
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
 
 #define W_SIZE 8 // 워드 사이즈
 #define DW_SIZE 16 // 더블워드 사이즈
-#define CHUNK_SIZE (1<<12) // 4KB
+#define CHUNK_SIZE (1<<5) // 4KB
 
 
 // 해당 위치 value 가져오기
@@ -214,6 +215,7 @@ void *mm_malloc(size_t size) {
         a_size = DW_SIZE * ((size + (DW_SIZE) + (DW_SIZE-1)) / DW_SIZE);
     }
 
+    // best로 수정
     if((bp = first_fit(a_size)) != NULL) {
         place(bp, a_size);
         return bp;
@@ -239,128 +241,84 @@ void mm_free(void *ptr) {
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
-void *mm_realloc(void *ptr, size_t size) {
-    void *newptr;
-    void *next_bp;
-    size_t old_size;
-    size_t a_size;
-    size_t copySize;
 
-    if (ptr == NULL) {
-        return mm_malloc(size);
+void *mm_realloc(void *old_bp, size_t req_size) {
+
+    if(old_bp == NULL) {
+        return mm_malloc(req_size);
     }
 
-    if (size == 0) {
-        mm_free(ptr);
+    if(req_size == 0) {
+        mm_free(old_bp);
         return NULL;
     }
 
-    if (size <= DW_SIZE) {
-        a_size = 2 * DW_SIZE;
+    void* new_bp = old_bp; // 임시: 앞 블럭과 병합하면 앞 블럭으로 이동
+    size_t old_b_size = GET_BLOCK_SIZE(HDR_P(old_bp));
+    size_t c_size = old_b_size; // 임시: 앞, 뒤 병합 후 진짜 c_size
+    size_t a_size; // 조정된 블럭 사이즈즈 req_size 기준으로 16배수로 조정
+    void* prev_bp = PREV_BLOCK_P(old_bp);
+    void* next_bp = NEXT_BLOCK_P(old_bp);
+
+    char is_alloc_flag[2] = {0, 0};
+
+    if(req_size <= DW_SIZE) { // 16배수로 조정 -> a_size = 새로운 블럭 사이즈
+            a_size = 2*DW_SIZE;   
     }
     else {
-        a_size = DW_SIZE * ((size + DW_SIZE + (DW_SIZE - 1)) / DW_SIZE);
+        a_size = DW_SIZE * ((req_size + (DW_SIZE) + (DW_SIZE-1)) / DW_SIZE);
     }
 
-    old_size = GET_BLOCK_SIZE(HDR_P(ptr));
-    copySize = old_size - DW_SIZE;
-    if (size < copySize) {
-        copySize = size;
+    
+    // 1. check prev -> is_alloc, block_size
+    if(!GET_IS_ALLOC(HDR_P(prev_bp))) {
+        c_size += GET_BLOCK_SIZE(HDR_P(prev_bp));
+        is_alloc_flag[0]++;
     }
 
-    if (a_size <= old_size) {
-        if ((old_size - a_size) >= (4 * W_SIZE)) {
-            void *free_bp;
-            size_t free_size = old_size - a_size;
-
-            INSERT_H(ptr, a_size, 1);
-            INSERT_F(ptr, a_size, 1);
-
-            free_bp = NEXT_BLOCK_P(ptr);
-            INSERT_H(free_bp, free_size, 0);
-            INSERT_F(free_bp, free_size, 0);
-            insert_free_list(coalesce(free_bp));
-        }
-        return ptr;
+    // 2. check next -> is_alloc, block_size
+    if(!GET_IS_ALLOC(HDR_P(next_bp))) {
+        c_size += GET_BLOCK_SIZE(HDR_P(next_bp));
+        is_alloc_flag[1]++;
     }
 
-    next_bp = NEXT_BLOCK_P(ptr);
 
-    if (!GET_IS_ALLOC(HDR_P(next_bp))) {
-        size_t combined_size = old_size + GET_BLOCK_SIZE(HDR_P(next_bp));
-
-        if (combined_size >= a_size) {
-            remove_free_list(next_bp);
-
-            if ((combined_size - a_size) >= (4 * W_SIZE)) {
-                void *free_bp;
-                size_t free_size = combined_size - a_size;
-
-                INSERT_H(ptr, a_size, 1);
-                INSERT_F(ptr, a_size, 1);
-
-                free_bp = NEXT_BLOCK_P(ptr);
-                INSERT_H(free_bp, free_size, 0);
-                INSERT_F(free_bp, free_size, 0);
-                insert_free_list(free_bp);
-            }
-            else {
-                INSERT_H(ptr, combined_size, 1);
-                INSERT_F(ptr, combined_size, 1);
-            }
-            return ptr;
-        }
-    }
-
-    if (GET_BLOCK_SIZE(HDR_P(next_bp)) == 0) {
-        size_t extend_size = a_size - old_size;
-
-        if (mem_sbrk(extend_size) == (void *)-1) {
-            return NULL;
-        }
-
-        INSERT_H(ptr, a_size, 1);
-        INSERT_F(ptr, a_size, 1);
-        PUT(HDR_P(NEXT_BLOCK_P(ptr)), MAKE_H_F(0, 1));
-        return ptr;
-    }
-
-    if (!GET_IS_ALLOC(FTR_P(PREV_BLOCK_P(ptr)))) {
-        void *prev_bp = PREV_BLOCK_P(ptr);
-        size_t combined_size = GET_BLOCK_SIZE(HDR_P(prev_bp)) + old_size;
-
-        if (combined_size >= a_size) {
+    // 3. compair size 
+    if(a_size <= c_size) {
+        if(is_alloc_flag[0] == 1) {
+            new_bp = prev_bp; // 새로 할당받을 블럭 주소를 이전 블럭 주소로 변경
             remove_free_list(prev_bp);
-            memmove(prev_bp, ptr, copySize);
-
-            if ((combined_size - a_size) >= (4 * W_SIZE)) {
-                void *free_bp;
-                size_t free_size = combined_size - a_size;
-
-                INSERT_H(prev_bp, a_size, 1);
-                INSERT_F(prev_bp, a_size, 1);
-
-                free_bp = NEXT_BLOCK_P(prev_bp);
-                INSERT_H(free_bp, free_size, 0);
-                INSERT_F(free_bp, free_size, 0);
-                insert_free_list(free_bp);
-            }
-            else {
-                INSERT_H(prev_bp, combined_size, 1);
-                INSERT_F(prev_bp, combined_size, 1);
-            }
-            return prev_bp;
         }
-    }
+        if(is_alloc_flag[1] == 1) {
+            remove_free_list(next_bp);
+        }
 
-    newptr = mm_malloc(size);
-    if (newptr == NULL) {
-        return NULL;
-    }
+        // 메로리 할당
+        memmove(new_bp, old_bp, MIN(old_b_size-DW_SIZE, req_size)); // 영역 겹칠 경우 대비
 
-    memcpy(newptr, ptr, copySize);
-    mm_free(ptr);
-    return newptr;
+        if((c_size - a_size) >= (4*W_SIZE)) {
+            INSERT_H(new_bp, a_size, 1);
+            INSERT_F(new_bp, a_size, 1);
+
+            // 분리된 공간 가용 영역으로 만들기
+            next_bp = NEXT_BLOCK_P(new_bp);
+            INSERT_H(next_bp, c_size - a_size, 0);
+            INSERT_F(next_bp, c_size - a_size, 0);
+            insert_free_list(next_bp);
+        }
+        else {
+            INSERT_H(new_bp, c_size, 1);
+            INSERT_F(new_bp, c_size, 1);
+        }
+
+        
+    }
+    else {
+        new_bp = mm_malloc(req_size);
+        memcpy(new_bp, old_bp, MIN(old_b_size-DW_SIZE, req_size));
+        mm_free(old_bp);
+    }
+    return new_bp;
 }
 
 
@@ -440,7 +398,7 @@ static void place(void *bp, size_t a_size) {
     // a_size 할당 받을 블럭 크기, c_size 블럭 전체 크기, c_size - a_size 남은 블럭 크기
     // split 가능하면 하고 가능하지 않으면 그대로 할당
     // 남은 크기가 32보다 클 경우 (최소 블럭 크기 = 8+8+8+8) 헤더, 포인터2개, 풋터 
-    if((c_size - a_size) >= (4*W_SIZE)) {
+    if((c_size - a_size) >= (2*DW_SIZE)) {
         INSERT_H(bp, a_size, 1);
         INSERT_F(bp, a_size, 1);
 
